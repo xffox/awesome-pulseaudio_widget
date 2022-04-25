@@ -97,18 +97,27 @@ function widget:notify(v)
 
 end
 
-function widget:update_sink(object_path)
-  self.sink = pulse.get_device(self.connection, object_path)
+function widget:update_sinks()
+  local path = self.core:get_fallback_sink() or self.core:get_sinks()[1]
+  if path then
+    self.sink = pulse.get_device(self.connection, path, self._volume_step)
+  else
+    self.sink = nil
+  end
 end
 
-function widget:update_sources(sources)
-  for _, source_path in ipairs(sources) do
-    local s = pulse.get_device(self.connection, source_path)
-    if s.Name and not s.Name:match("%.monitor$") then
-      self.source = s
-      break
-    else
-      self.source = nil
+function widget:update_sources()
+  local fallback_path = self.core:get_fallback_source()
+  if fallback_path then
+    self.source = pulse.get_device(self.connection, fallback_path, self._volume_step)
+  else
+    self.source = nil
+    for _, source_path in ipairs(self.core:get_sources()) do
+      local s = pulse.get_device(self.connection, source_path, self._volume_step)
+      if s.Name and not s.Name:match("%.monitor$") then
+        self.source = s
+        break
+      end
     end
   end
 end
@@ -144,6 +153,16 @@ end
 function widget.toggle_muted_mic()
   if widget.source then
     widget.source:toggle_muted()
+  end
+end
+
+function widget.set_volume_step(volume_step)
+  widget._volume_step = volume_step
+  if widget.source then
+    widget.source.volume_step = widget._volume_step
+  end
+  if widget.sink then
+    widget.sink.volume_step = widget._volume_step
   end
 end
 
@@ -197,6 +216,7 @@ function widget:init()
 
   self.mixer = "pavucontrol"
   self.notification_timeout_seconds = 1
+  self._volume_step = nil
 
   self.connection = pulse.get_connection(address)
   self.core = pulse.get_core(self.connection)
@@ -207,8 +227,8 @@ function widget:init()
 
   self.core:ListenForSignal("org.PulseAudio.Core1.NewSink", {self.core.object_path})
   self.core:connect_signal(
-    function (_, newsink)
-      self:update_sink(newsink)
+    function (_, _)
+      self:update_sinks()
       self:connect_device(self.sink)
       local volume = self.sink:is_muted() and "Muted" or self.sink:get_volume_percent()[1]
       self:update_appearance(volume)
@@ -218,18 +238,18 @@ function widget:init()
 
   self.core:ListenForSignal("org.PulseAudio.Core1.NewSource", {self.core.object_path})
   self.core:connect_signal(
-    function (_, newsource)
-      self:update_sources({newsource})
+    function (_, _)
+      self:update_sources()
       self:connect_device(self.source)
     end,
     "NewSource"
   )
 
-  self:update_sources(self.core:get_sources())
+  self:update_sources()
   self:connect_device(self.source)
 
   local sink_path = assert(self.core:get_sinks()[1], "No sinks found")
-  self:update_sink(sink_path)
+  self:update_sinks()
   self:connect_device(self.sink)
 
   local volume = self.sink:is_muted() and "Muted" or self.sink:get_volume_percent()[1]
